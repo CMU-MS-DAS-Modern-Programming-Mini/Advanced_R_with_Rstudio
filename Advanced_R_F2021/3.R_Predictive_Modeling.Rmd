@@ -1,0 +1,435 @@
+---
+title: "R_Data_Science_Predictive_Modeling"
+author: "Kim Wong"
+date: "04/01/2021"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+##
+## Material taken from
+## Graham J. Williams. 2017. The Essentials of Data Science: Knowledge Discovery Using R (1st ed.). Chapman & Hall/CRC.
+##
+## Load required libraries
+```{r}
+library(magrittr)     # Pipe operator %>% %<>% %T>% equals().
+library(lubridate)    # Dates and time.
+library(rattle)       # normVarNames().
+library(ROCR)         # Use prediction() for evaluation.
+library(rpart)        # Model: decision tree.
+library(scales)       # Include commas in numbers.
+library(stringi)      # String concat operator %s+%.
+library(tidyverse)    # ggplot2, tibble, tidyr, readr, purr, dplyr, stringr
+```
+
+## Load dataset
+
+### specify folder name
+```{r}
+fpath <- getwd() %>% print()
+```
+### specify timestamp
+```{r}
+dsdate <- "_20201104"
+```
+### specify filename for dataset
+```{r}
+dsname="cleaned_weatherAUS"
+dsrdata <- 
+  file.path(fpath, dsname %s+% dsdate %s+% ".RData") %T>% 
+  print()
+```
+
+### load dataset
+```{r}
+load(dsrdata) %>% print()
+```
+
+### inspect metadata
+```{r}
+dsname
+dspath
+dsdate
+nobs %>% comcat()
+```
+
+```{r}
+vars
+```
+```{r}
+target
+risk
+id
+ignore
+omit
+train %>% length() %>% comcat()
+validate %>% length() %>% comcat()
+test %>% length() %>% comcat()
+```
+## Building a decision tree model
+
+### train a decision tree model
+```{r}
+m_rp <- rpart(form, ds[train, vars])
+```
+
+### recast model in terms of generic variables
+```{r}
+model <- m_rp
+mtype <- "rpart"
+mdesc <- "Decision Tree"
+```
+### basic model structure
+```{r}
+model
+```
+### summary of basic model structure
+```{r}
+summary(model)
+```
+
+### visualize the tree
+```{r}
+fancyRpartPlot(model)
+```
+
+### visualize the variable importance 
+```{r}
+ggVarImp(model)
+```
+
+### Evaluate model performance
+
+### using decision tree model, make prediction on the training set
+```{r}
+model %>%
+  predict(newdata=ds[train, vars], type="class") %>%
+  set_names(NULL) %T>%
+  {head(., 20) %>% print()} ->
+tr_class
+```
+### compare above prediction against observations in the training dataset
+```{r}
+head(tr_target, 20)
+```
+### obtain matches between prediction and observations
+```{r}
+head(tr_class) == head(tr_target)
+sum(head(tr_class) == head(tr_target))
+sum(tr_class == tr_target)
+length(train)
+```
+### using decision tree model, predict the probability of raining tomorrow on the training set
+```{r}
+model %>%
+  predict(newdata=ds[train, vars], type="prob") %>%
+  .[,2] %>%
+  set_names(NULL) %>%
+  round(2) %T>%
+  {head(., 20) %>% print()} ->
+tr_prob
+```
+### compute overall accuracy
+```{r}
+sum(tr_class == tr_target) %>%
+  divide_by(length(tr_target)) %T>%
+  {
+    percent(.) %>%
+      sprintf("Overall accuracy = %s\n", .) %>%
+      cat()
+  } ->
+tr_acc
+```
+### compute overall error
+```{r}
+sum(tr_class != tr_target) %>%
+  divide_by(length(tr_target)) %T>%
+  {
+    percent(.) %>%
+      sprintf("Overall error = %s\n", .) %>%
+      cat()
+  } ->
+tr_err
+```
+### comparison of prediction and observation as a confusion matrix (counts)
+```{r}
+table(tr_target, tr_class, dnn=c("Actual", "Predicted"))
+```
+### comparison of prediction and observation as a confusion matrix (percentage)
+```{r}
+table(tr_target, tr_class, dnn=c("Actual", "Predicted")) %>%
+  divide_by(length(tr_target)) %>%
+  multiply_by(100) %>% round(1)
+```
+### rattle::errorMatrix provides confusion matrix and class errors
+```{r}
+errorMatrix(tr_target, tr_class, count=TRUE)
+```
+
+```{r}
+errorMatrix(tr_target, tr_class) %T>%
+  print() ->
+tr_matrix
+```
+
+### compute recall, precision, and F-score.  The recall is the proportion of true positives that are identified by the model.  The precision is the proportion of true positives that are among the positives predicted by the model.  The F-score is the harmonic mean of these two measures.
+```{r}
+tr_rec <- (tr_matrix[2,2]/(tr_matrix[2,2]+tr_matrix[2,1])) %T>%
+  {percent(.) %>% sprintf("Recall = %s\n", .) %>% cat()}
+
+tr_pre <- (tr_matrix[2,2]/(tr_matrix[2,2]+tr_matrix[1,2])) %T>%
+  {percent(.) %>% sprintf("Precision = %s\n", .) %>% cat()}
+
+tr_fsc <- ((2 * tr_pre * tr_rec)/(tr_rec + tr_pre))  %T>%
+  {sprintf("F-Score = %.3f\n", .) %>% cat()}
+```
+
+
+
+
+
+
+## Random Forest
+
+### load additional library
+```{r}
+library(randomForest)          # Model: randomForest() na.roughfix()
+```
+
+### reload data
+```{r}
+load(dsrdata) %>% print()
+```
+### train a random forest model
+```{r}
+m_rf <- randomForest(form, data=ds[train, vars], ntree=10, na.action=na.roughfix, importance=TRUE)
+```
+
+
+### recast model in terms of generic variables
+```{r}
+model <- m_rf
+mtype <- "randomForest"
+mdesc <- "Random Forest"
+```
+
+### basic model structure
+```{r}
+model
+```
+
+### visualize the variable importance 
+```{r}
+ggVarImp(model, log=TRUE)
+```
+
+### make prediction on the validation dataset
+```{r}
+model %>%
+  predict(newdata=ds[validate, vars], type="prob") %>%
+  .[,2] %>%
+  set_names(NULL) %>%
+  round(2) %T>%
+  {head(., 20) %>% print()} ->
+va_prob
+```
+
+```{r}
+model %>%
+  predict(newdata=ds[validate, vars], type="response") %>%
+  set_names(NULL) %T>%
+  {head(., 20) %>% print()} ->
+va_class
+```
+
+
+### compute overall accuracy (note the na.rm=TRUE for checking and discarding prediction/observations with missing values).
+```{r}
+sum(va_class == va_target, na.rm=TRUE) %>%
+  divide_by(va_class %>% is.na() %>% not() %>% sum()) %T>%
+  {
+    percent(.) %>%
+      sprintf("Overall accuracy = %s\n", .) %>%
+      cat()
+  } ->
+va_acc
+```
+### compute overall error (note the na.rm=TRUE for checking and discarding prediction/observations with missing values).
+```{r}
+sum(va_class != va_target, na.rm=TRUE) %>%
+  divide_by(va_class %>% is.na() %>% not() %>% sum()) %T>%
+    {
+    percent(.) %>%
+      sprintf("Overall error = %s\n", .) %>%
+      cat()
+  } ->
+va_err
+```
+
+### rattle::errorMatrix provides confusion matrix and class errors
+```{r}
+errorMatrix(va_target, va_class, count=TRUE)
+```
+
+```{r}
+errorMatrix(va_target, va_class) %T>%
+  print() ->
+va_matrix
+```
+
+```{r}
+va_matrix %>%
+  diag() %>%
+  sum(na.rm=TRUE) %>%
+  subtract(100, .) %>%
+  sprintf("Overall error percentage = %s%%\n", .) %>%
+  cat()
+```
+
+
+```{r}
+va_matrix[,"Error"] %>%
+  mean(na.rm=TRUE) %>%
+  sprintf("Averaged class error percentage = %s%%\n", .) %>%
+  cat()
+```
+
+
+### compute recall, precision, and F-score.  The recall is the proportion of true positives that are identified by the model.  The precision is the proportion of true positives that are among the positives predicted by the model.  The F-score is the harmonic mean of these two measures.
+```{r}
+va_rec <- (va_matrix[2,2]/(va_matrix[2,2]+va_matrix[2,1])) %T>%
+  {percent(.) %>% sprintf("Recall = %s\n", .) %>% cat()}
+
+va_pre <- (va_matrix[2,2]/(va_matrix[2,2]+va_matrix[1,2])) %T>%
+  {percent(.) %>% sprintf("Precision = %s\n", .) %>% cat()}
+
+va_fsc <- ((2 * va_pre * va_rec)/(va_rec + va_pre))  %T>%
+  {sprintf("F-Score = %.3f\n", .) %>% cat()}
+```
+
+### plot risk chart
+```{r}
+riskchart(va_prob, va_target, va_risk) +
+  labs(title="Risk Chart - " %s+% mtype %s+% " - Validation Dataset") +
+  theme(plot.title=element_text(size=14))
+```
+
+
+## Extreme gradient boosting
+```{r}
+library(Matrix)                 # Data wrangling: sparse.model.matrix()
+library(xgboost)                # Models: extreme gradient boosting
+```
+
+### convert categoric variables into numeric
+```{r}
+formula(target %s+% "~ .-1") %>%
+  sparse.model.matrix(data=ds[vars] %>% na.roughfix()) %T>%
+  {dim(.) %>% print()} %T>%
+  {head(.) %>% print()} ->
+sds
+```
+
+### generate a vector to populate the values of the target variable
+```{r}
+ds[target] %>%
+  unlist(use.names=FALSE) %>%
+  equals("yes") %T>%
+  {head(., 20) %>% print()} ->
+label
+```
+### train an extreme gradient boosting model
+```{r}
+m_xg <- xgboost(data=sds[train,],
+                label=label[train],
+                nrounds=100,
+                print_every_n=15,
+                objective="binary:logistic")
+```
+### recast model in terms of generic variables
+```{r}
+model <- m_xg
+mtype <- "xgboost"
+mdesc <- "Extreme Gradient Boosting"
+```
+
+### basic model structure
+```{r}
+model
+```
+
+### visualize the variable importance 
+```{r}
+ggVarImp(model, feature_names=colnames(sds), n=20)
+```
+
+### make prediction on the validation dataset
+```{r}
+model %>%
+  predict(newdata=sds[validate,], type="prob") %>%
+  set_names(NULL) %>%
+  round(2) %T>%
+  {head(., 20) %>% print()} ->
+va_prob
+```
+
+```{r}
+va_prob %>%
+  is_greater_than(0.5) %>%
+  ifelse("yes", "no") %T>%
+  {head(., 20) %>% print()} ->
+va_class
+```
+
+### compute overall accuracy (note the na.rm=TRUE for checking and discarding prediction/observations with missing values).
+```{r}
+sum(va_class == va_target, na.rm=TRUE) %>%
+  divide_by(va_class %>% is.na() %>% not() %>% sum()) %T>%
+  {
+    percent(.) %>%
+      sprintf("Overall accuracy = %s\n", .) %>%
+      cat()
+  } ->
+va_acc
+```
+### compute overall error (note the na.rm=TRUE for checking and discarding prediction/observations with missing values).
+```{r}
+sum(va_class != va_target, na.rm=TRUE) %>%
+  divide_by(va_class %>% is.na() %>% not() %>% sum()) %T>%
+    {
+    percent(.) %>%
+      sprintf("Overall error = %s\n", .) %>%
+      cat()
+  } ->
+va_err
+```
+
+### rattle::errorMatrix provides confusion matrix and class errors
+```{r}
+errorMatrix(va_target, va_class, count=TRUE)
+```
+
+```{r}
+errorMatrix(va_target, va_class) %T>%
+  print() ->
+va_matrix
+```
+
+```{r}
+va_matrix %>%
+  diag() %>%
+  sum(na.rm=TRUE) %>%
+  subtract(100, .) %>%
+  sprintf("Overall error percentage = %s%%\n", .) %>%
+  cat()
+```
+```{r}
+va_matrix[,"Error"] %>%
+  mean(na.rm=TRUE) %>%
+  sprintf("Averaged class error percentage = %s%%\n", .) %>%
+  cat()
+```
+
+
+
+

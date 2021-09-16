@@ -1,0 +1,632 @@
+---
+title: "1.R_Data_Cleanup"
+author: "Kim Wong"
+date: "04/01/2021"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+##
+## Material taken from
+## Graham J. Williams. 2017. The Essentials of Data Science: Knowledge Discovery Using R (1st ed.). Chapman & Hall/CRC.
+##
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load required packages
+```{r}
+library(tidyverse)    # ggplot2, tibble, tidyr, readr, purr, dplyr
+library(rattle)       # comcat(), weatherAUS, normVarNames().
+library(magrittr)     # Pipe operator %>% %<>% %T>% equals().
+library(lubridate)    # Dates and time.
+library(stringi)      # String concat operator %s+%.
+library(stringr)      # String manipulation: str_replace().
+library(randomForest) # Impute missing values with na.roughfix()
+library(FSelector)    # Feature selection: information.gain().
+library(scales)       # Include commas in numbers.
+library(xtable)       # Generate LaTeX tables.
+```
+
+## Location of datafile from web; load CSV file
+```{r}
+##dspath <- "http://rattle.togaware.com/weatherAUS.csv"
+dspath <- "https://rattle.togaware.com/weatherAUS.csv"
+weatherAUS <- read_csv(file=dspath, guess_max = 8888)
+#weatherAUS <- rattle::weatherAUS
+```
+
+## Assign original dataset to generic variable
+```{r}
+ds <- weatherAUS
+ds
+```
+
+## dimensions of data frame
+
+```{r}
+dim(ds) %>% comcat()
+nrow(ds) %>% comcat()
+ncol(ds) %>% comcat()
+```
+
+## Use dplyr::glimpse to get a glimpse of the data
+```{r}
+glimpse(ds)
+```
+
+## Output only variable names
+```{r}
+names(ds)
+```
+
+## Normalize variable names
+```{r}
+names(ds) <- normVarNames(names(ds))
+names(ds)
+```
+
+## Use head and tail to glimpse the top and bottom rows of data
+```{r}
+head(ds)
+tail(ds)
+```
+## Randomly sample 10 columns of data
+```{r}
+set.seed(42)
+sample_n(ds, size = 10)
+```
+
+## Data Cleaning
+
+### output the unique cities in Australia
+```{r}
+ds$location %>% unique() %>% length()
+```
+
+### get the distribution of observations for cities
+```{r}
+ds$location %<>% as.factor()
+table(ds$location)
+```
+
+### dplyr::selec() used to find variables with a particular string
+```{r}
+ds %>% select(starts_with("rain_")) %>% sapply(table)
+```
+
+### find variable names with rain_   
+```{r}
+ds %>% select(starts_with("rain_")) %>% names() %T>% print() -> vnames
+ds[vnames] %>% sapply(class)
+```
+
+### convert variables from character to factor class
+```{r}
+ds[vnames] %<>% lapply(factor)
+ds[vnames] %>% sapply(class)
+```
+### Verify that the distribution has not changed
+```{r}
+ds %>% select(starts_with("rain_")) %>% sapply(table)
+```
+
+## Review the distribution of observations across levels
+```{r}
+ds %>% select(contains("_dir")) %>% sapply(table)
+```
+## Note the names of the wind direction variables
+```{r}
+ds %>% select(contains("_dir")) %>% names() %T>% print() -> vnames
+```
+
+### Confirm that these variables are of type character
+```{r}
+ds[vnames] %>% sapply(class)
+```
+
+### set ordered compass directions
+```{r}
+compass <- c("N", "NNE", "NE", "ENE",
+             "E", "ESE", "SE", "SSE",
+             "S", "SSW", "SW", "WSW",
+             "W", "WNW", "NW", "NNW")
+```
+
+### use ordered compass directions for factor levels
+```{r}
+ds[vnames] %<>% lapply(factor, levels=compass, ordered=TRUE) %>% data.frame() %>% tbl_df() %T>% {sapply(.,class) %>% print()}
+```
+
+### Verify that the distribution has not changed
+```{r}
+ds %>% select(contains("dir")) %>% sapply(table)
+```
+
+## Evaporation and Sunshine
+
+```{r}
+cvars <- c("evaporation","sunshine")
+head(ds[cvars])
+```
+
+```{r}
+sample_n(ds[c("evaporation","sunshine")], 10)
+```
+
+```{r}
+ds[cvars] %>% sapply(class)
+```
+
+## Categoric
+
+
+```{r}
+ds %>% sapply(is.factor) %>% which() -> catc
+```
+
+```{r}
+glimpse(ds[catc])
+```
+
+
+```{r}
+for (v in catc) levels(ds[[v]]) %<>% normVarNames()
+```
+
+```{r}
+glimpse(ds[catc])
+```
+
+## Prepare target and make sure it is a factor type
+```{r}
+target <- "rain_tomorrow"
+ds[[target]] %<>% as.factor()
+ds[target] %>% table()
+```
+
+```{r}
+ds %>%
+  ggplot(aes_string(x=target)) +
+  geom_bar(width=0.2, fill="grey") +
+  scale_y_continuous(labels=comma) +
+  theme(text=element_text(size=14))
+```
+
+## Parititioning the data set into dependent and independent variables
+```{r}
+ds %>% names() %T>% print() -> vars
+```
+
+## What we wish to predict is if it will "rain tomorrow" given historical weather data.  The variable "rain_tomorrow" is therefore the target that depends on the other data. One convention is to place the target in front of the other data.
+```{r}
+c(target, vars) %>% unique() %T>% print() -> vars
+```
+
+## risk_mm records the amount of rain that fell tomorrow; it measures the risk of the outcome we are predicting.  Therefore, risk_mm is an output variable.  Also, variables date and location are identifiers; these variables are not used as independent variables for building predictive models.
+```{r}
+risk <- "risk_mm"
+id <- c("date", "location")
+```
+
+## Identifying irrelevant variables within a dataset
+### Ignore identifiers and risk variables 
+```{r}
+union(id, risk) -> ignore
+ignore
+```
+
+## Helper function to count unique entries
+```{r}
+count_unique <- function(x) {length(unique(x))}
+```
+
+```{r}
+ds[vars] %>% sapply(count_unique) %>% equals(nrow(ds)) %>% which() %>% names() %T>% print() -> ids
+```
+
+### Let's just look at the data for Sydney.
+```{r}
+ds_sydney <- filter(ds, location=="sydney")
+ds_sydney[vars] %>% sapply(count_unique) %>% equals(nrow(ds_sydney)) %>% which () %>% names()
+```
+
+### Helper function to count the number of missing values
+```{r}
+count_na <- function(x) {sum(is.na(x))}
+```
+
+### Check for variables with completely missing data
+```{r}
+ds[vars] %>% sapply(count_na) %>% equals(nrow(ds)) %>% which () %>% names() %T>% print() -> missing
+```
+
+### Let's just look at the data for Sydney.
+```{r}
+ds_sydney <- filter(ds, location=="sydney")
+ds_sydney[vars] %>% sapply(count_na) %>% equals(nrow(ds_sydney)) %>% which () %>% names()
+```
+
+### Let's just look at the data for Albury
+```{r}
+ds_albury <- filter(ds, location=="albury")
+ds_albury[vars] %>% sapply(count_na) %>% equals(nrow(ds_albury)) %>% which () %>% names()
+```
+
+## Flag variable will many missing entries
+```{r}
+missing.threshold <- 0.8
+ds[vars] %>% sapply(count_na) %>% '>'(missing.threshold*nrow(ds)) %>% which () %>% names() %T>% print() -> mostly
+```
+
+## Check Sydney
+```{r}
+missing.threshold <- 1.0
+ds_sydney[vars] %>% sapply(count_na) %>% '>'(missing.threshold*nrow(ds_sydney)) %>% which () %>% names()
+```
+
+## Flag variables with too many factor levels
+```{r}
+count_levels <- function(x){ds %>% extract2(x) %>% levels() %>% length()}
+```
+
+```{r}
+levels.threshold <- 16
+ds[vars] %>% sapply(is.factor) %>% which() %>% names() %>% sapply(count_levels) %>% '>='(levels.threshold) %>% which() %>% names() %T>% print() -> too.many
+```
+
+## Flag constants
+```{r}
+all_same <- function(x){all(x==x[1L])}
+```
+
+```{r}
+ds[vars] %>% sapply(all_same) %>% which() %>% names() %T>% print() -> constants
+```
+
+## Flag correlated variables
+```{r}
+vars %>% setdiff(ignore) %>% extract(ds, .) %>% sapply(is.numeric) %>% which () %>% names() %T>% print() -> numc
+```
+
+```{r}
+ds[numc] %>%
+  cor(use="complete.obs") %>%
+  ifelse(upper.tri(., diag=TRUE), NA, .) %>% 
+  abs() %>% 
+  data.frame() %>%
+  tbl_df() %>%
+  set_colnames(numc) %>%
+  mutate(var1=numc) %>% 
+  gather(var2, cor, -var1) %>% 
+  na.omit() %>%
+  arrange(-abs(cor)) %T>%
+  print() ->
+mc
+```
+## Added correlated variables to ignore set
+```{r}
+correlated <- c("temp_3pm", "pressure_3pm", "temp_9am")
+ignore <- union(ignore,correlated)
+ignore
+```
+
+## Remove ignore variables from full set
+```{r}
+length(vars)
+
+vars %<>% setdiff(ignore) %T>% print()
+
+length(vars)
+```
+
+## Construct formula for modeling
+```{r}
+form <- formula(target %s+% " ~ .") %T>% print()
+```
+
+
+## Identify attribute subset using correlation and entropy measures.  FSelector::cfs
+```{r}
+cfs(form, ds[vars])
+```
+
+## Use information gain to identify variables of importance. FSelector::information.gain
+```{r}
+information.gain(form, ds[vars]) %>%
+  rownames_to_column("variable") %>%
+  arrange(-attr_importance)
+```
+
+## Identify and remove observations with missing target
+```{r}
+dim(ds)
+ds %>% extract2(target) %>% is.na() -> missing_target 
+sum(missing_target)
+ds %<>% filter(!missing_target)
+dim(ds)
+```
+
+## Remove observations with missing entries
+```{r}
+ods <- ds
+
+omit <- NULL
+
+ds[vars] %>% nrow()
+ds[vars] %>% is.na() %>% sum() %>% comcat()
+```
+
+```{r}
+mo <- attr(na.omit(ds[vars]), "na.action")
+```
+
+```{r}
+omit <- union(omit,mo)
+```
+
+```{r}
+if (length(omit)) ds <- ds[-omit,]
+```
+
+```{r}
+ds[vars] %>% nrow() %>% comcat()
+ds[vars] %>% is.na() %>% sum() %>% comcat()
+```
+
+```{r}
+ds <- ods
+omit <- NULL
+```
+
+## Augment data with derived features
+```{r}
+ds %<>%
+  mutate(year   = factor(format(date,"%Y")),
+         season = format(ds$date, "%m") %>%
+                  as.integer() %>%
+                  sapply(function(x)
+                    switch(x,
+                           "summer", "summer", "autumn",
+                           "autumn", "autumn", "winter",
+                           "winter", "winter", "spring",
+                           "spring", "spring", "summer")) %>%
+                  as.factor()) %T>%
+                  {select(., date, year, season) %>% sample_n(10) %>% print()}
+vars %<>% c("season")
+id %<>% c("year")
+```
+
+## Augment data with model-generated features
+```{r}
+set.seed(4242)
+nclust <- 5
+
+ds[c("location",numc)] %>%
+  group_by(location) %>%
+  summarise_all(funs(mean(.,na.rm=TRUE))) %T>%
+  {locations <<- .$location} %>%
+  select(-location) %>%
+  sapply(function(x) ifelse(is.nan(x),0,x)) %>%
+  as.data.frame() %>%
+  sapply(scale) %>%
+  kmeans(nclust) %T>%
+  print() %>%
+  extract2("cluster") ->
+cluster
+```
+
+```{r}
+head(cluster)
+```
+
+```{r}
+names(cluster) <- locations
+
+ds %<>% mutate(cluster="area" %>% paste0(cluster[ds$location]) %>% as.factor)
+
+ds %>% select(location, cluster) %>% sample_n(10)
+```
+
+```{r}
+vars %<>% c("cluster")
+```
+
+## Sanity check of clusters
+```{r}
+cluster[levels(ds$location)] %>% sort()
+```
+
+
+## Preparing Metadata
+
+```{r}
+vars %>% setdiff(target) %T>% print() -> inputs
+```
+
+### Get integer index for each input variable in the original dataset
+```{r}
+inputs %>%
+  sapply(function(x) which(x == names(ds)), USE.NAMES=FALSE) %T>%
+  print() ->
+inputi
+```
+### Get the number of observations 
+```{r}
+ds %>% nrow() %T>% comcat() -> nobs
+```
+### Sanity check that the dimensions for various data subsets are correct
+```{r}
+dim(ds) %>% comcat()
+
+dim(ds[vars]) %>% comcat()
+
+dim(ds[inputs]) %>% comcat()
+
+dim(ds[inputi]) %>% comcat()
+
+```
+
+### Identify numeric variables by index
+```{r}
+ds %>%
+  sapply(is.numeric) %>%
+  which() %>%
+  intersect(inputi) %T>%
+  print() ->
+numi
+```
+
+### Identify numeric variables by name
+```{r}
+ds %>%
+  names() %>%
+  extract(numi) %T>%
+  print() ->
+numc
+```
+
+```{r}
+names(ds)
+```
+
+### Identify categoric variables by index
+```{r}
+ds %>%
+  sapply(is.factor) %>%
+  which() %>%
+  intersect(inputi) %T>%
+  print() ->
+cati
+```
+
+### Idenify categoric variables by name
+```{r}
+ds %>%
+  names() %>%
+  extract(cati) %T>%
+  print() ->
+numc
+```
+
+## Setup various components for model building
+
+### Create the formula for a classification model
+```{r}
+ds[vars] %>%
+  formula() %>%
+  print() ->
+form
+```
+
+### Generate training, validation and testing datasets
+```{r}
+seed=424242
+set.seed(seed)
+
+nobs %>%
+  sample(0.70*nobs) %T>%
+  {length(.) %>% comcat()} %T>%
+  {sort(.) %>% head(30) %>% print()} ->
+train
+
+nobs %>%
+  seq_len() %>%
+  setdiff(train) %>%
+  sample(0.15*nobs) %T>%
+  {length(.) %>% comcat()} %T>%
+  {sort(.) %>% head(15) %>% print()} ->
+validate
+
+nobs %>%
+  seq_len() %>%
+  setdiff(union(train, validate)) %T>%
+  {length(.) %>% comcat()} %T>%
+  {head(.) %>% print(15)} ->
+test
+```
+### Set up cache of values for target and risk variables
+```{r}
+tr_target <- ds[train,][[target]] %T>% {head(.,20) %>% print()}
+```
+```{r}
+tr_risk <- ds[train,][[risk]] %T>% {head(., 20) %>% print()}
+```
+```{r}
+va_target <- ds[validate,][[target]] %T>% {head(.,20) %>% print()}
+```
+```{r}
+va_risk <- ds[validate,][[risk]] %T>% {head(., 20) %>% print()}
+```
+
+```{r}
+te_target <- ds[test,][[target]] %T>% {head(., 20) %>% print()}
+```
+
+```{r}
+te_risk <- ds[test,][[risk]] %T>% {head(., 20) %>% print()}
+```
+
+## Save dataset
+
+### specify folder name
+```{r}
+fpath <- getwd() %>% print()
+```
+### generate timestamp
+```{r}
+dsdate  <- "_" %s+% format(Sys.Date(), "%Y%m%d") %T>% print()
+```
+### specify filename for dataset
+```{r}
+dsname="cleaned_weatherAUS"
+dsrdata <- 
+  file.path(fpath, dsname %s+% dsdate %s+% ".RData") %T>% 
+  print()
+```
+### Save R objects to binary RData format
+```{r}
+save(ds, dsname, dspath, dsdate, nobs,
+     vars, target, risk, id, ignore, omit, 
+     inputi, inputs, numi, numc, cati, catc,
+     form, seed, train, validate, test,
+     tr_target, tr_risk, va_target, va_risk, te_target, te_risk,
+     file=dsrdata)
+```
+
+### Check file size
+```{r} 
+file.size(dsrdata) %>% comma()
+```
+
+### Reload dataset
+```{r}
+load(dsrdata) %>% print()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

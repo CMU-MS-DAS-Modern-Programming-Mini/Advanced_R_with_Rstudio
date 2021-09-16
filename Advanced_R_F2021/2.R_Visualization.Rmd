@@ -1,0 +1,329 @@
+---
+title: "2.R_Visualization"
+author: "Kim Wong"
+date: "04/01/2021"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+##
+## Material taken from
+## Graham J. Williams. 2017. The Essentials of Data Science: Knowledge Discovery Using R (1st ed.). Chapman & Hall/CRC.
+##
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load required packages
+```{r}
+library(dplyr)        # glimpse().
+library(ggplot2)      # Visualise data.
+library(magrittr)     # Data pipelines: %>% %<>% %T>% equals().
+library(randomForest) # na.roughfix() for missing data.
+library(rattle)       # normVarNames().
+library(rattle.data)  # weatherAUS.
+library(scales)       # commas(), percent().
+library(stringr)      # str_replace_all().
+library(stringi)      # String concat operator %s+%.
+```
+
+## Edgar Anderson's Iris Data
+```{r}
+iris
+```
+
+
+## A Simple scatterplot 
+```{r}
+iris %>%
+  ggplot(aes(x=Sepal.Length, y=Sepal.Width, size=4)) +
+  geom_point()
+```
+
+## A simple line plot with data points
+```{r}
+iris %>%
+  ggplot(aes(x=Sepal.Length, y=Sepal.Width)) +
+  geom_point() +
+  geom_line()
+```
+
+
+## A Simple scatterplot but color coding of points based on species variable; also encode size
+```{r}
+iris %>%
+  ggplot(aes(x=Sepal.Length, y=Sepal.Width, color=Species)) +
+  geom_point(aes(size=Petal.Length))
+```
+
+## A Simple scatterplot but shape coding of points based on species variable
+```{r}
+iris %>%
+  ggplot(aes(x=Sepal.Length, y=Sepal.Width, shape=Species, size=Petal.Width)) +
+  geom_point()
+```
+
+## dimensions of data frame
+
+```{r}
+iris %>%
+  ggplot(aes(x=Sepal.Length, y=Sepal.Width)) +
+  geom_point() +
+  #stat_smooth(method="lm", formula=y~x+I(x^2))
+  #stat_smooth(method="lm", formula=y~poly(x,2))
+  #stat_smooth(method="loess", formula=y~x)
+  stat_smooth(method="gam", formula=y~s(x), se=T)
+```
+
+
+
+## Let's load the data which we output from the data cleaning notebook
+```{r}
+fpath <- getwd() %>% print()
+```
+## generate timestamp
+```{r}
+#dsdate  <- "_" %s+% format(Sys.Date(), "%Y%m%d") %T>% print()
+dsdate <- "_20201104"
+```
+## specify filename for dataset
+```{r}
+dsname="cleaned_weatherAUS"
+dsrdata <- 
+  file.path(fpath, dsname %s+% dsdate %s+% ".RData") %T>% 
+  file.path(fpath, dsname %s+% dsdate %s+% ".RData") %T>% 
+  print()
+```
+
+## Load R objects from file and list them
+```{r}
+load(dsrdata) %>% print()
+```
+
+## Take a peak at the data
+```{r}
+glimpse(ds)
+```
+## Count the number of missing values.
+```{r}
+ds[vars] %>% is.na() %>% sum() %>% comcat()
+```
+
+## Impute missing values.
+```{r}
+ds[vars] %<>% na.roughfix()
+```
+
+## Confirm that no missing values remain
+```{r}
+ds[vars] %>% is.na() %>% sum() %>% comcat()
+```
+
+## Take a peak at the data again
+```{r}
+glimpse(ds)
+```
+
+## Randomly pull out a sample of 1000 observations from data set
+```{r}
+ds %>% nrow() %>% sample(1000) -> sobs
+```
+## Do a scatterplot of the min and max temperatures and encode if it will rain tomorrow in the color
+```{r}
+ds %>% extract(sobs,) %>% 
+  ggplot(aes(x=min_temp, y=max_temp, color=rain_tomorrow)) +
+  geom_point()
+```
+
+## Standard bar chart.
+```{r}
+ds %>% ggplot(aes(x=wind_dir_3pm)) + geom_bar()
+```
+
+## ## Standard bar chart with binary outcome encoded in the color.
+```{r}
+ds %>% ggplot(aes(x=wind_dir_3pm, fill=rain_tomorrow)) + 
+  geom_bar()
+```
+
+## Define two shades of blue using ColorBrewer, http://colorbrewer2.org.
+
+```{r}
+library(RColorBrewer)
+blues2 <- brewer.pal(4,"Paired")[1:2] %T>% print()
+```
+## Output the number of weather stations from data set
+```{r}
+ds$location %>%
+  unique() %>%
+  length() %>%
+  print() ->
+  num_locations
+```
+
+## Generate a bar chart with more complex annotation
+```{r}
+ds %>%
+  ggplot(aes(x=wind_dir_3pm, fill=rain_tomorrow)) +
+  geom_bar() +
+  scale_fill_manual(values = blues2,
+                    labels = c("No Rain", "Rain")) +
+  scale_y_continuous(labels = comma) +
+  theme(legend.position = c(0.95, 0.85),
+        legend.title      = element_text(color="grey40"),
+        legend.text       = element_text(color="grey40"),
+        legend.background = element_rect(fill="transparent")) +
+  labs(title    = "Rain Expectedd by Wind Direction at 3PM",
+       subtitle = "Observations from " %s+%
+                   num_locations %s+% "weather stations",
+       caption  = "Source: Australian Bureau of Meteorology",
+       x        = "Wind Direction 3PM",
+       y        = "Number of Days",
+       fill     = "Tomorrow")
+```
+## Bar chart of mean temperature at 3PM across all 49 weather stations
+```{r}
+ds %>%
+  ggplot(aes(x=location, y=temp_3pm, fill=location)) +
+  geom_bar(stat="summary", fun.y="mean") +
+  theme(legend.position="none")
+```
+## Since the above plot has all labeled weather stations cluttered together, let's rotate the labels by 90 degrees.
+```{r}
+ds %>%
+  ggplot(aes(x=location, y=temp_3pm, fill=location)) +
+  geom_bar(stat="summary", fun.y="mean") +
+  theme(legend.position="none") +
+  theme(axis.text.x = element_text(angle=90))
+```
+## Instead of rotating the labels by 90 degrees, we can flip the x-y coordinates.
+```{r}
+ds %>%
+  ggplot(aes(x=location, y=temp_3pm, fill=location)) +
+  geom_bar(stat="summary", fun.y="mean") +
+  theme(legend.position="none") +
+  #theme(axis.text.x = element_text(angle=90)) +
+  coord_flip()
+```
+
+## We want to reorder the location in alphabetical order instead of the reverse
+```{r}
+ds$location %>%
+  levels() %>%
+  rev() ->
+  loc
+```
+
+## Use mutate within dplyr to temporarily place the location in alphabetical order
+```{r}
+ds %>%
+  mutate(location=factor(location,levels=loc)) %>%
+  ggplot(aes(x=location, y=temp_3pm, fill=location)) +
+  geom_bar(stat="summary", fun.y="mean") +
+  theme(legend.position="none") +
+  #theme(axis.text.x = element_text(angle=90)) +
+  coord_flip()
+```
+
+## Output box plot of maximum temperature as a parameter of year
+```{r}
+ds %>%
+  ggplot(aes(year, max_temp, fill=year)) +
+  geom_boxplot(notch = T) + 
+  theme(legend.position="none")
+```
+## Output violin plot of maximum temperature as a parameter of year
+```{r}
+ds %>%
+  ggplot(aes(year, max_temp, fill=year)) +
+  geom_violin() + 
+  theme(legend.position="none")
+```
+## Overlay box plot and violin plot of maximum temperature as a parameter of year
+```{r}
+ds %>%
+  ggplot(aes(year, max_temp, fill=year)) +
+  geom_violin() + 
+  geom_boxplot(width=0.5, position = position_dodge(width=0)) +
+  theme(legend.position="none")
+```
+## Use facet_wrap to split the plots across locations
+```{r}
+ds %>%
+  ggplot(aes(x=year, y=max_temp, fill=year)) +
+  geom_violin() + 
+  geom_boxplot(width=0.5, position=position_dodge(width=0)) +
+  theme(legend.position="none") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  facet_wrap(~location, ncol=5)
+```
+## Create a helper funtion so as to visualize clusters of location
+```{r}
+myplot <- function(ds, n)
+{
+ds %>%
+  filter(cluster==n) %>%
+  ggplot(aes(x=year, y=max_temp, fill=year)) +
+  geom_violin() + 
+  geom_boxplot(width=0.5, position=position_dodge(width=0)) +
+  theme(legend.position="none") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  facet_wrap(~location, ncol=5)
+}
+```
+
+
+```{r}
+myplot(ds,"area3")
+```
+
+## convert variables from character to factor class
+```{r}
+lblr <- function(x) 
+{
+  x %>%
+    str_replace_all("n", "North ") %>%
+    str_replace_all("s", "South ") %>%
+    str_replace_all("e", "East ") %>%
+    str_replace_all("w", "West ") %>%
+    str_replace(" $", "")
+}
+```
+
+## convert wind direction to factor
+```{r}
+ds %>%
+  sample_n(10000) %>%
+  ggplot(aes(x=min_temp, y=max_temp, colour=rain_tomorrow)) +
+  geom_point(shape=".") +
+  geom_smooth(method="gam", formula=y~s(x, bs="cs")) +
+  facet_wrap(~wind_dir_3pm, labeller=labeller(wind_dir_3pm=lblr)) +
+  labs(x      = "Min Temp", 
+       y      = "Max Temp", 
+       colour = "Rain Tomorrow")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
